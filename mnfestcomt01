@@ -51,3 +51,22 @@ class OpenShiftVMManager:
         self.vms.patch(name=name, namespace=self.namespace, content_type='application/merge-patch+json',
                        body={"spec": {"running": True}})
         print(f"Restarted VM: {name}")
+
+####
+import json
+import yaml
+
+# Define the source JSON file and destination YAML file
+source_file = '/path/to/source.json'
+destination_file = '/path/to/destination.yaml'
+
+# Read the JSON file
+with open(source_file, 'r') as json_file:
+    data = json.load(json_file)
+
+# Write to the YAML file
+with open(destination_file, 'w') as yaml_file:
+    yaml.dump(data, yaml_file, default_flow_style=False)
+
+print(f"Converted {source_file} to {destination_file}")
+
