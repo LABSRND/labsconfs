@@ -1,0 +1,175 @@
+Overview: Argo CD HA Deployment
+Argo CD is a declarative, GitOps continuous delivery tool for Kubernetes. In HA mode, its components are scaled and configured to ensure resilience, fault-tolerance, and performance in production clusters.
+
+
+1. Prerequisites
+A Kubernetes cluster (v1.21+) with:
+
+Minimum 3 worker nodes.
+
+Load balancer support (e.g., NGINX, MetalLB, AWS ELB).
+
+kubectl, helm, and argocd CLI installed.
+
+A Git repository with your application manifests.
+
+2. HA Architecture Components
+Component	HA Strategy
+API Server	Multiple replicas, behind a Service
+Controller	Multiple replicas (leader election)
+Repo Server	Multiple replicas (with sharding)
+Redis	Clustered with sentinel (or use Redis HA chart)
+Application Controller	StatefulSet with leader election
+Dex (optional)	Scaled if using external SSO
+
+3. Install Argo CD HA via Helm
+Add Helm Repo
+bash
+helm repo add argo https://argoproj.github.io/argo-helm
+helm repo update
+
+===================================================================================================
+Create values-ha.yaml
+===================================================================================================
+Create values-ha.yaml
+yaml
+Copy
+Edit
+controller:
+  replicas: 3
+  metrics:
+    enabled: true
+
+repoServer:
+  replicas: 2
+  metrics:
+    enabled: true
+
+server:
+  replicas: 2
+  autoscaling:
+    enabled: true
+  service:
+    type: LoadBalancer
+
+redis:
+  enabled: true
+  architecture: replication
+  master:
+    replicaCount: 1
+  replica:
+    replicaCount: 2
+
+applicationSet:
+  enabled: true
+
+configs:
+  cm:
+    application.instanceLabelKey: argocd.argoproj.io/instance
+
+====================================================================================================
+Install with Helm
+====================================================================================================
+bash
+Copy
+Edit
+helm upgrade --install argocd argo/argo-cd -n argocd --create-namespace -f values-ha.yaml
+
+====================================================================================================
+====================================================================================================
+4. Expose the Argo CD API Server
+Option A: LoadBalancer
+
+bash
+Copy
+Edit
+kubectl get svc -n argocd argocd-server -o wide
+Option B: Ingress (Recommended for TLS)
+
+yaml
+Copy
+Edit
+server:
+  ingress:
+    enabled: true
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    hosts:
+      - argocd.example.com
+    tls:
+      - hosts:
+          - argocd.example.com
+        secretName: argocd-tls
+5. Authentication & Access Control
+Dex (OIDC provider) can be enabled for SSO.
+
+Configure RBAC in argocd-rbac-cm:
+
+yaml
+Copy
+Edit
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+data:
+  policy.csv: |
+    g, admin, role:admin
+
+
+==============================================================================================================================
+==============================================================================================================================
+6. Repository & Application Setup
+Add a Git Repository
+bash
+Copy
+Edit
+argocd repo add https://github.com/your-org/your-repo.git --username user --password pass
+Create an Application
+bash
+Copy
+Edit
+argocd app create my-app \
+  --repo https://github.com/your-org/your-repo.git \
+  --path app-folder \
+  --dest-server https://kubernetes.default.svc \
+  --dest-namespace default
+
+
+==============================================================================================================================
+==============================================================================================================================
+
+7. Monitoring & Logging
+Metrics: Expose via Prometheus-compatible endpoints.
+
+Logging: Aggregate logs using Fluentd + ElasticSearch or Loki.
+
+8. Failover & Maintenance
+Redis Sentinel ensures failover of Redis master.
+
+Application Controller and API Server use leader election and can be rescheduled.
+
+9. Backup & Restore
+Use argocd export and argocd import commands or store manifests in Git with a DR strategy for Redis and Postgres (if customized).
+
+
+==============================================================================================================================
+==============================================================================================================================
+Validation
+Check component health:
+
+bash
+Copy
+Edit
+kubectl get pods -n argocd
+argocd app list
+Test HA:
+
+Delete one replica of API server or controller:
+
+bash
+Copy
+Edit
+kubectl delete pod <pod-name> -n argocd
+System should remain operational.
+
