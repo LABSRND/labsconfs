@@ -1,0 +1,188 @@
+Overview
+Bitbucket Data Center enables Git-based source control with CI/CD integration and enterprise-grade performance. For HA deployment, it uses a clustered architecture involving:
+
+Multiple Bitbucket application nodes
+
+Shared file system (e.g., NFS)
+
+External PostgreSQL database
+
+Load balancer
+
+Optional CI/CD runners (e.g., Bamboo, Jenkins)
+
+1. Architecture Overview
+Components in HA Configuration:
+Component	Role
+Bitbucket Nodes	Stateless web/app servers
+Shared File System	For repo storage and shared artifacts
+External Database	PostgreSQL recommended
+Load Balancer	Distributes traffic across nodes
+CI/CD System	Connects via Webhooks or REST API
+ElasticSearch (Optional)	For code search, not HA by default
+
+⚙️ 2. Prerequisites
+Kubernetes Cluster or traditional VMs
+
+Helm (for Kubernetes installs)
+
+Persistent Volume (e.g., NFS, EFS)
+
+External PostgreSQL DB (HA cluster recommended)
+
+Ingress Controller or external Load Balancer
+
+Bitbucket DC license
+
+3. Install via Helm (Kubernetes)
+Bitbucket DC is available on Atlassian Data Center Helm Charts.
+
+Step 1: Add Atlassian Helm Repo
+bash
+Copy
+Edit
+helm repo add atlassian-data-center https://atlassian.github.io/data-center-helm-charts
+helm repo update
+Step 2: Create Values File (bitbucket-values.yaml)
+yaml
+Copy
+Edit
+replicaCount: 3
+
+ingress:
+  enabled: true
+  className: "nginx"
+  hosts:
+    - host: bitbucket.example.com
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls:
+    - hosts:
+        - bitbucket.example.com
+      secretName: bitbucket-tls
+
+sharedHome:
+  nfs:
+    server: 10.0.0.2
+    path: /bitbucket-shared
+
+database:
+  type: postgres
+  url: jdbc:postgresql://db.example.com:5432/bitbucket
+  driver: org.postgresql.Driver
+  credentials:
+    secretName: bitbucket-db-creds
+
+license:
+  secretName: bitbucket-license
+Step 3: Deploy Bitbucket DC
+bash
+Copy
+Edit
+helm install bitbucket atlassian-data-center/bitbucket -f bitbucket-values.yaml -n bitbucket --create-namespace
+🔧 4. External PostgreSQL (HA)
+Set up PostgreSQL using:
+
+AWS RDS Multi-AZ or GCP Cloud SQL HA
+
+On-prem with Patroni + etcd + HAProxy
+
+Ensure:
+
+High throughput
+
+Automatic failover
+
+SSL encryption enabled
+
+5. Load Balancer Setup
+Bitbucket nodes must be behind a Layer 7 load balancer (e.g., NGINX, AWS ELB).
+
+Session affinity is required:
+
+nginx
+Copy
+Edit
+proxy_pass http://bitbucket-cluster;
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+Use Ingress with sticky sessions for Kubernetes deployments.
+
+6. Connect to CD Tools (e.g., Bamboo, Jenkins)
+Use Webhooks or REST API:
+
+bash
+Copy
+Edit
+curl -u user:token \
+  -X POST "https://bitbucket.example.com/rest/api/latest/projects/PROJ/repos/repo/builds"
+You can configure:
+
+Webhooks for Bamboo pipelines
+
+CI triggers via Jenkins plugins
+
+Integrations via Bitbucket Pipelines (for Bitbucket Cloud)
+
+7. Storage Considerations
+Use NFS, Amazon EFS, or similar for shared-home.
+
+Store:
+
+Git repositories
+
+Avatars and artifacts
+
+Plugin cache
+
+Use ReadWriteMany (RWX) Persistent Volumes in K8s.
+
+8. Security and Access
+Use Ingress TLS with valid certs
+
+Set up RBAC in Bitbucket for project/repo access
+
+Enable SSH access to Git repositories
+
+Configure LDAP or SAML SSO for enterprise login
+
+9. Monitoring & Logging
+Integrate with:
+
+Prometheus + Grafana: for CPU, memory, DB metrics
+
+ELK / Loki: for centralized logging
+
+Native JMX exporters for Java metrics
+
+10. Backup & Restore
+Use Bitbucket Backup Client to:
+
+Snapshot PostgreSQL
+
+Backup shared home
+
+Schedule regular syncs
+
+Final Validation
+bash
+Copy
+Edit
+kubectl get pods -n bitbucket
+kubectl get ingress -n bitbucket
+Test:
+
+Load balancing
+
+SSH & HTTPS clone/push
+
+CI/CD job triggering
+
+Summary
+Step	Description
+Helm Install	Deploys HA with 3+ replicas
+External DB	Use HA PostgreSQL cluster
+Load Balancer	Routes traffic, enables session affinity
+Shared Storage	NFS or RWX PVs for shared-home
+CD Integration	Connect via webhooks, APIs, or Pipelines
