@@ -1,0 +1,166 @@
+sudo apt update
+sudo apt install -y python3 python3-pip python3-venv git curl
+
+
+
+
+curl -L https://github.com/temporalio/cli/releases/latest/download/temporal-linux-amd64 -o /usr/local/bin/temporal
+chmod +x /usr/local/bin/temporal
+
+temporal server start-dev --ip 127.0.0.1
+
+
+
+curl -L https://github.com/temporalio/cli/releases/latest/download/temporal-linux-amd64 -o /usr/local/bin/temporal
+chmod +x /usr/local/bin/temporal
+
+temporal server start-dev --ip 127.0.0.1
+
+
+
+1. Create Virtual Environment
+
+python3 -m venv venv
+source venv/bin/activate
+pip install flask pyyaml temporalio gitpython
+
+
+===============================================
+workflows.py
+===============================================
+from temporalio import workflow, activity
+from dataclasses import dataclass
+from datetime import timedelta
+import os
+import yaml
+from git import Repo
+
+@dataclass
+class VMRequest:
+    json_data: dict
+    filename: str
+
+@workflow.defn
+class VMProvisionWorkflow:
+    @workflow.run
+    async def run(self, req: VMRequest) -> str:
+        yaml_path = await workflow.execute_activity(
+            convert_to_yaml,
+            req,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        await workflow.execute_activity(
+            commit_to_git,
+            yaml_path,
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        return f"Provisioned and committed {yaml_path}"
+
+@activity.defn
+def convert_to_yaml(req: VMRequest) -> str:
+    path = f"./repo/{req.filename}.yaml"
+    with open(path, "w") as f:
+        yaml.dump(req.json_data, f)
+    return path
+
+@activity.defn
+def commit_to_git(filepath: str):
+    repo = Repo("./repo")
+    repo.git.add(filepath)
+    repo.index.commit(f"Add new VM spec: {os.path.basename(filepath)}")
+    origin = repo.remote(name="origin")
+    origin.push()
+
+
+===============================================
+workers.py
+===============================================
+
+import asyncio
+from temporalio.worker import Worker
+from temporalio.client import Client
+from workflows import VMProvisionWorkflow, convert_to_yaml, commit_to_git
+
+async def main():
+    client = await Client.connect("localhost:7233")
+    worker = Worker(
+        client,
+        task_queue="vm-tasks",
+        workflows=[VMProvisionWorkflow],
+        activities=[convert_to_yaml, commit_to_git],
+    )
+    await worker.run()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+===============================================
+app.py
+===============================================
+
+from flask import Flask, request, render_template
+from temporalio.client import Client
+from workflows import VMProvisionWorkflow, VMRequest
+import json
+import uuid
+import asyncio
+
+app = Flask(__name__)
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
+        json_data = request.form.get("json_data")
+        try:
+            data = json.loads(json_data)
+            filename = f"vm_{uuid.uuid4().hex[:8]}"
+            asyncio.run(start_workflow(data, filename))
+            return f"Submitted VM spec. Stored as {filename}.yaml"
+        except Exception as e:
+            return f"Invalid JSON: {str(e)}"
+    return render_template("form.html")
+
+async def start_workflow(data, filename):
+    client = await Client.connect("localhost:7233")
+    await client.start_workflow(
+        VMProvisionWorkflow.run,
+        VMRequest(data, filename),
+        id=f"vm-{filename}",
+        task_queue="vm-tasks",
+    )
+
+if __name__ == "__main__":
+    app.run(debug=True)
+=========================================================================
+templates/form.html
+=========================================================================
+<!DOCTYPE html>
+<html>
+<head><title>KubeVirt VM Form</title></head>
+<body>
+<h2>Submit KubeVirt VM JSON</h2>
+<form method="POST">
+    <textarea name="json_data" rows="20" cols="80"></textarea><br>
+    <input type="submit" value="Submit">
+</form>
+</body>
+</html>
+
+
+======================================================================
+Run The solution
+
+
+In separate terminals:
+
+# Terminal 1: Temporal server
+temporal server start-dev
+
+# Terminal 2: Run Temporal worker
+source venv/bin/activate
+python workers.py
+
+# Terminal 3: Run Flask web server
+source venv/bin/activate
+python app.py
+=====================================================================
